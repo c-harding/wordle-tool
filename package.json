@@ -17,5 +17,8 @@
     "eslint-plugin-prettier": "^4.0.0",
     "prettier": "^2.5.1",
     "typescript": "^4.5.5"
+  },
+  "dependencies": {
+    "arg": "^5.0.1"
   }
 }

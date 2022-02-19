@@ -1,3 +1,4 @@
+import arg from "arg";
 import { createInterface } from "readline";
 import { stdin, stdout } from "process";
 import { readFileSync } from "fs";
@@ -297,15 +298,6 @@ interface GameMode {
 
 let gameModeName: GameModeName = GameModeName.NORMAL;
 
-const args = process.argv.slice(2);
-
-const defineFlag = (flag: string) => {
-  const position = args.indexOf(flag);
-  const enabled = position !== -1;
-  if (enabled) args.splice(position, 1);
-  return enabled;
-};
-
 const printUsage = (): never => {
   console.log(
     [
@@ -342,26 +334,45 @@ const printUsage = (): never => {
   process.exit(1);
 };
 
-const defineFlagWithArgument = (flag: string): string | undefined => {
-  let position = args.indexOf(flag);
-  if (position !== -1) {
-    if (position === args.length - 1) {
-      printUsage();
-    }
-    const arg = args[position + 1];
-    args.splice(position, 2);
-    return arg;
-  }
-
-  position = args.findIndex((arg) => arg.startsWith(`${flag}=`));
-  if (position !== -1) {
-    const arg = args[position].substring(flag.length + 1);
-    args.splice(position, 1);
-    return arg;
-  }
-
-  return undefined;
-};
+const {
+  "--help": helpMode,
+  "--hard": hardMode,
+  "--quiet": quietMode,
+  "--verbose": verboseMode,
+  "--test": testMode,
+  "--random": randomMode,
+  "--free": freeMode,
+  "--score": scoreGuess,
+  "--threads": threadCount = 1,
+  "--rounds": roundCount = 6,
+  "--file": wordFile = path.normalize(
+    `${path.dirname(fileURLToPath(import.meta.url))}/../words.json`
+  ),
+  _: args,
+} = arg({
+  "--help": Boolean,
+  "-h": "--help",
+  "--hard": Boolean,
+  "-H": "--hard",
+  "--quiet": Boolean,
+  "-q": "--quiet",
+  "--verbose": Boolean,
+  "-v": "--verbose",
+  "--test": Boolean,
+  "-T": "--test",
+  "--random": Boolean,
+  "-R": "--random",
+  "--free": Boolean,
+  "-F": "--free",
+  "--score": String,
+  "-S": "--score",
+  "--threads": Number,
+  "-t": "--threads",
+  "--rounds": Number,
+  "-r": "--rounds",
+  "--file": String,
+  "-f": "--file",
+});
 
 const mapAsyncSequentially = async <A, B>(
   array: A[],
@@ -386,20 +397,6 @@ const juxtapose = (outputs: string[]): string => {
     .map((_, i) => paddedOutputs.map((output) => output[i]).join("  "))
     .join("\n");
 };
-
-const helpMode = defineFlag("--help");
-const hardMode = defineFlag("--hard");
-const quietMode = defineFlag("--quiet");
-const verboseMode = defineFlag("--verbose");
-const testMode = defineFlag("--test");
-const randomMode = defineFlag("--random");
-const freeMode = defineFlag("--free");
-const scoreGuess = defineFlagWithArgument("--score");
-const threadCount = parseInt(defineFlagWithArgument("--threads") ?? "", 10) || 1;
-const roundCount = parseInt(defineFlagWithArgument("--rounds") ?? "", 10) || 6;
-const wordFile =
-  defineFlagWithArgument("--file") ??
-  path.normalize(`${path.dirname(fileURLToPath(import.meta.url))}/../words.json`);
 
 const loadAllWords = (): string[] => JSON.parse(readFileSync(wordFile, "utf8"));
 
