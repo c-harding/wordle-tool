@@ -1,15 +1,19 @@
-const countOccurrences = (string, character) => (string.match(new RegExp(character, 'g')) ?? []).length
+import { createInterface } from 'readline';
 
-const countLetters = word => {
-  const counts = {};
+import { stdin as input, stdout as output } from 'node:process';
+
+const countOccurrences = (string: string, character: string) => (string.match(new RegExp(character, 'g')) ?? []).length
+
+const countLetters = (word: string): Record<string, number> => {
+  const counts: Record<string, number> = {};
   for (const letter of word) {
     counts[letter] = (counts[letter] ?? 0) + 1;
   }
   return counts;
 }
 
-const scoreLetters = (words) => {
-  let letters = {};
+const scoreLetters = (words: string[]) => {
+  let letters: Record<string, number[]> = {};
 
   let effectiveCount = words.length;
   words.forEach(word => {
@@ -29,18 +33,18 @@ const scoreLetters = (words) => {
   return letters;
 }
 
-const score = (word, letters, validWords) => {
+const score = (word: string, letters: Record<string, number[]>, validWords: string[]) => {
   const baseScore = Object.entries(countLetters(word)).map(([letter, count]) => letters[letter]?.[count - 1] ?? 0).reduce((a, b) => a + b, 0);
   if (!validWords.includes(word)) return baseScore;
   return baseScore * 1.1 + 1;
 }
 
-const range = function* (n) { for (let i = 0; i < n; i++) yield i }
+const range = function* (n = Infinity) { for (let i = 0; i < n; i++) yield i }
 
-const testGuess = (guess, solution) => {
-  const result = [];
+const makeGuess = (guess: string, solution: string): LetterResult[] => {
+  const result: LetterResult[] = [];
   // Handle duplicate letters by counting the number of times each letter occurs without being counted
-  const letterOccurrences = {};
+  const letterOccurrences: Record<string, number> = {};
   for (const i of range(5)) {
     const nextLetter = solution[i];
     if (guess[i] !== nextLetter) {
@@ -48,50 +52,69 @@ const testGuess = (guess, solution) => {
     }
   }
 
+
   for (const i of range(5)) {
     const nextLetter = guess[i];
 
     if (nextLetter === solution[i]) {
-      result.push('GREEN');
+      result.push(LetterResult.GREEN);
     } else if (letterOccurrences[nextLetter]) {
       letterOccurrences[nextLetter] -= 1;
-      result.push('YELLOW');
+      result.push(LetterResult.YELLOW);
     } else {
-      result.push('GRAY');
+      result.push(LetterResult.GRAY);
     }
   }
   return result;
 };
 
-const makeGuess = (
-  guess, response,
+interface Known {
+  fixed: string;
+  good: Record<string, number>;
+  bad: Record<string, number>;
+  badPositions: Record<string, Set<number>>;
+  guessResult: string;
+}
+
+const newKnown = (): Known => ({
+  fixed: '.....',
+  good: {},
+  bad: {},
+  badPositions: {},
+  guessResult: ''
+})
+
+enum LetterResult { GREEN, YELLOW, GRAY }
+
+const updateKnown = (
+  guess: string, response: LetterResult[],
   {
-    fixed: oldFixed = '.....',
-    good: oldGood = {},
-    bad: oldBad = {},
-    badPositions = {},
-    guessResult = ''
-  } = {}
+    fixed: oldFixed,
+    good: oldGood,
+    bad: oldBad,
+    badPositions,
+    guessResult
+  } = newKnown()
 ) => {
   let knownFixed = '';
-  let newGood = {};
-  let newBad = new Set();
+  let newGood: Record<string, number> = {};
+  let newBad = new Set<string>();
 
   for (const [i, color] of response.entries()) {
     const nextLetter = guess[i];
     switch (color) {
-      case 'GREEN':
+      case LetterResult.GREEN:
         guessResult += '🟩';
         newGood[nextLetter] = (newGood[nextLetter] ?? 0) + 1;
         knownFixed += nextLetter;
         break;
-      case 'YELLOW':
+      case LetterResult.YELLOW:
         guessResult += '🟨';
         newGood[nextLetter] = (newGood[nextLetter] ?? 0) + 1;
         badPositions = { ...badPositions, [nextLetter]: new Set(badPositions[nextLetter]).add(i) }
         knownFixed += oldFixed[i];
         break;
-      case 'GRAY':
+      case LetterResult.GRAY:
         guessResult += '⬜';
         newBad.add(nextLetter);
         knownFixed += oldFixed[i];
@@ -110,15 +133,15 @@ const makeGuess = (
   };
 }
 
-const chooseWord = (words, guessPool = words) => {
+const chooseWord = (words: string[], guessPool = words) => {
   const letterScores = scoreLetters(words);
   if (verboseMode) {
-    console.log('scored letters', Object.fromEntries(Object.entries(letterScores).sort(([, a], [, b]) => b - a)));
+    console.log('scored letters', Object.fromEntries(Object.entries(letterScores).sort(([, a], [, b]) => b[0] - a[0])));
   }
   return guessPool.reduce((best, next) => score(best, letterScores, words) > score(next, letterScores, words) ? best : next);
 }
 
-const filterWords = (words, known) => {
+const filterWords = (words: any[], known: Known) => {
   const regex = new RegExp(known.fixed);
   return words.filter(word =>
     regex.test(word)
@@ -128,7 +151,7 @@ const filterWords = (words, known) => {
   )
 }
 
-const printKnown = (known) => {
+const printKnown = (known: Known) => {
   console.log(known.guessResult);
 
   if (!known.fixed.includes('.')) return;
@@ -139,21 +162,17 @@ const printKnown = (known) => {
   console.log('Bad Positions', known.badPositions);
 }
 
-const readline = require('readline');
+const rl = createInterface({ input, output });
 
-const { stdin: input, stdout: output } = require('node:process');
+const question = (text: string) => new Promise<string>(resolve => rl.question(text, resolve));
 
-const rl = readline.createInterface({ input, output });
-
-const question = text => new Promise(resolve => rl.question(text, resolve))
-
-const requestResult = async () => {
+const requestResult = async (): Promise<LetterResult[]> => {
   console.log("Please enter the result, with 2 for green, 1 for yellow, and 0 for gray. For example, enter 01120 for ⬜🟨🟨🟩⬜")
   while (true) {
     const response = await question('? ');
     if (/^[012]{5}$/.test(response)) {
       console.log(response);
-      return [...response].map(char => ['GRAY', 'YELLOW', 'GREEN'][char]);
+      return [...response].map(char => [LetterResult.GRAY, LetterResult.YELLOW, LetterResult.GREEN][+char]);
     }
     console.error("Please enter five digits.");
   }
@@ -170,34 +189,22 @@ const requestGuess = async () => {
   }
 }
 
-let gameModeName = 'normal';
+enum GameModeName { NORMAL, TEST, SCORE };
+interface GameMode {
+  maxArgs?: number;
+  minArgs?: number;
+  run(args: string[]): void;
+}
+
+let gameModeName: GameModeName = GameModeName.NORMAL;
 
 const args = process.argv.slice(2);
 
-const defineFlag = flag => {
+const defineFlag = (flag: string) => {
   const position = args.indexOf(flag);
   const enabled = position !== -1;
   if (enabled) args.splice(position, 1);
   return enabled;
-}
-
-const defineFlagWithArgument = (flag) => {
-  let position = args.indexOf(flag);
-  if (position !== -1) {
-    if (position === args.length - 1) {
-      printUsage();
-    }
-    const arg = args[position + 1];
-    args.splice(position, 2);
-    return arg;
-  }
-
-  position = args.findIndex(arg => arg.startsWith(flag + '='));
-  if (position !== -1) {
-    const arg = args[position].substring(flags.length + 1);
-    args.splice(position, 1);
-    return arg;
-  }
 }
 
 const printUsage = () => {
@@ -210,22 +217,41 @@ const printUsage = () => {
   process.exit(1);
 }
 
+const defineFlagWithArgument = (flag: string) => {
+  let position = args.indexOf(flag);
+  if (position !== -1) {
+    if (position === args.length - 1) {
+      printUsage();
+    }
+    const arg = args[position + 1];
+    args.splice(position, 2);
+    return arg;
+  }
+
+  position = args.findIndex(arg => arg.startsWith(flag + '='));
+  if (position !== -1) {
+    const arg = args[position].substring(flag.length + 1);
+    args.splice(position, 1);
+    return arg;
+  }
+}
+
 const hardMode = defineFlag('--hard');
 const quietMode = defineFlag('--quiet');
 const verboseMode = defineFlag('--verbose');
 const testMode = defineFlag('--test');
 const freeMode = defineFlag('--free');
 const scoreMode = defineFlag('--score');
-const roundCount = parseInt(defineFlagWithArgument('--rounds'), 10) || 6;
+const roundCount = parseInt(defineFlagWithArgument('--rounds') ?? "", 10) || 6;
 const wordFile = defineFlagWithArgument('--file') ?? 'words.json';
 
 const loadAllWords = () => JSON.parse(require('fs').readFileSync(wordFile, 'utf8'));
 
-if (testMode) gameModeName = 'test';
-if (scoreMode) gameModeName = 'score';
+if (testMode) gameModeName = GameModeName.TEST;
+if (scoreMode) gameModeName = GameModeName.SCORE;
 
-const gameModes = {
-  normal: {
+const gameModes: Record<GameModeName, GameMode> = {
+  [GameModeName.NORMAL]: {
     maxArgs: 1,
     async run([solution]) {
       const allWords = loadAllWords();
@@ -235,8 +261,10 @@ const gameModes = {
         process.exit(1);
       }
 
-      let known, words = allWords;
-      for (const i of range(Infinity)) {
+      let known = newKnown();
+
+      let words = allWords;
+      for (const i of range()) {
         let guess;
         if (freeMode) {
           guess = await requestGuess();
@@ -246,8 +274,8 @@ const gameModes = {
           guess = chooseWord(words, guessPool);
         }
         if (!quietMode || !solution) console.log('Guessing', guess);
-        const response = solution ? testGuess(guess, solution) : await requestResult();
-        known = makeGuess(guess, response, known);
+        const response = solution ? makeGuess(guess, solution) : await requestResult();
+        known = updateKnown(guess, response, known);
         if (!known.fixed.includes('.')) break;
 
         words = filterWords(words, known);
@@ -260,30 +288,31 @@ const gameModes = {
         }
         if (!quietMode) console.log("Possible solutions", words);
       }
-      console.log(known.guessResult.trim());
+      console.log(known.guessResult?.trim());
       console.log(countOccurrences(known.guessResult, '\n'));
       process.exit(0);
     }
   },
-  test: {
+  [GameModeName.TEST]: {
     maxArgs: 0,
     async run() {
-      const frequencyOfScores = {};
+      const frequencyOfScores: Record<number, number> = {};
 
       const allWords = loadAllWords();
 
       await Promise.any(
         [
-          new Promise(async resolve => {
-            for (const answer of allWords) {
+          new Promise<void>(async resolve => {
+            for (const solution of allWords) {
               await new Promise(r => setTimeout(r, 0));
 
-              let known, words = allWords;
+              let known = newKnown();
+              let words = allWords;
               for (const i of range(10)) {
                 const guessPool = hardMode ? words : allWords;
                 const guess = chooseWord(words, guessPool);
-                const response = testGuess(guess, solution);
-                known = makeGuess(guess, response, known);
+                const response = makeGuess(guess, solution);
+                known = updateKnown(guess, response, known);
                 if (!known.fixed.includes('.')) break;
                 words = filterWords(words, known);
               }
@@ -292,7 +321,7 @@ const gameModes = {
             }
             resolve();
           }),
-          new Promise(resolve => {
+          new Promise<void>(resolve => {
             process.on('SIGINT', () => {
               process.on('SIGINT', () => process.exit(1));
               resolve();
@@ -301,15 +330,16 @@ const gameModes = {
         ]
       );
 
-      console.log(Object.fromEntries(Object.entries(frequencyOfScores).sort(([a], [b]) => a - b)));
+      console.log(Object.fromEntries(Object.entries(frequencyOfScores).sort(([a], [b]) => +a - +b)));
       process.exit();
     }
   },
-  score: {
+  [GameModeName.SCORE]: {
     minArgs: 2,
     maxArgs: 2,
     run([expected, found]) {
-      const known = makeGuess(found, expected);
+      const result = makeGuess(found, expected);
+      const known = updateKnown(found, result);
       printKnown(known);
     }
   }
