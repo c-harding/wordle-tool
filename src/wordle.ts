@@ -1,6 +1,8 @@
 import { createInterface } from "readline";
-import { stdin as input, stdout as output } from "process";
+import { stdin, stdout } from "process";
 import { readFileSync } from "fs";
+import * as path from "path";
+import { fileURLToPath } from "url";
 
 const countOccurrences = (string: string, character: string) =>
   (string.match(new RegExp(character, "g")) ?? []).length;
@@ -13,12 +15,14 @@ const countLetters = (word: string): Record<string, number> => {
   return counts;
 };
 
-const range = function* range(n = Infinity) {
-  for (let i = 0; i < n; i += 0) yield i;
-};
+function* range(n = Infinity) {
+  for (let i = 0; i < n; i += 1) yield i;
+}
+
+type LetterScores = Record<string, number[]>;
 
 const scoreLetters = (words: string[]) => {
-  const letters: Record<string, number[]> = {};
+  const letters: LetterScores = {};
 
   const effectiveCount = words.length;
   words.forEach((word) => {
@@ -38,7 +42,7 @@ const scoreLetters = (words: string[]) => {
   return letters;
 };
 
-const calculateScore = (word: string, letters: Record<string, number[]>, validWords: string[]) => {
+const scoreWord = (word: string, letters: LetterScores, validWords: string[]) => {
   const baseScore = Object.entries(countLetters(word))
     .map(([letter, count]) => letters[letter]?.[count - 1] ?? 0)
     .reduce((a, b) => a + b, 0);
@@ -47,9 +51,9 @@ const calculateScore = (word: string, letters: Record<string, number[]>, validWo
 };
 
 enum LetterResult {
-  GREEN,
-  YELLOW,
-  GRAY,
+  PERFECT,
+  CLOSE,
+  WRONG,
 }
 
 const makeGuess = (guess: string, solution: string): LetterResult[] => {
@@ -67,31 +71,35 @@ const makeGuess = (guess: string, solution: string): LetterResult[] => {
     const nextLetter = guess[i];
 
     if (nextLetter === solution[i]) {
-      result.push(LetterResult.GREEN);
+      result.push(LetterResult.PERFECT);
     } else if (letterOccurrences[nextLetter]) {
       letterOccurrences[nextLetter] -= 1;
-      result.push(LetterResult.YELLOW);
+      result.push(LetterResult.CLOSE);
     } else {
-      result.push(LetterResult.GRAY);
+      result.push(LetterResult.WRONG);
     }
   }
   return result;
 };
 
+type LetterCount = Record<string, number>;
+
 interface Known {
   fixed: string;
-  good: Record<string, number>;
-  bad: Record<string, number>;
+  good: LetterCount;
+  bad: LetterCount;
   badPositions: Record<string, Set<number>>;
   guessResult: string;
+  solved: boolean;
 }
 
-const newKnown = (): Known => ({
+const nothingKnown = (): Known => ({
   fixed: ".....",
   good: {},
   bad: {},
   badPositions: {},
   guessResult: "",
+  solved: false,
 });
 
 const updateKnown = (
@@ -103,23 +111,23 @@ const updateKnown = (
     bad: oldBad,
     badPositions: oldBadPositions,
     guessResult: oldGuessResult,
-  } = newKnown()
-) => {
+  } = nothingKnown()
+): Known => {
   let knownFixed = "";
   const newGood: Record<string, number> = {};
   const newBad = new Set<string>();
   let guessResult = oldGuessResult;
   let badPositions = oldBadPositions;
 
-  for (const [i, color] of response.entries()) {
+  for (const [i, letterResult] of response.entries()) {
     const nextLetter = guess[i];
-    switch (color) {
-      case LetterResult.GREEN:
+    switch (letterResult) {
+      case LetterResult.PERFECT:
         guessResult += "🟩";
         newGood[nextLetter] = (newGood[nextLetter] ?? 0) + 1;
         knownFixed += nextLetter;
         break;
-      case LetterResult.YELLOW:
+      case LetterResult.CLOSE:
         guessResult += "🟨";
         newGood[nextLetter] = (newGood[nextLetter] ?? 0) + 1;
         badPositions = {
@@ -128,13 +136,13 @@ const updateKnown = (
         };
         knownFixed += oldFixed[i];
         break;
-      case LetterResult.GRAY:
-        guessResult += "⬜";
+      case LetterResult.WRONG:
+        guessResult += "🟥";
         newBad.add(nextLetter);
         knownFixed += oldFixed[i];
         break;
       default:
-        throw new Error(`Unknown color ${color} in ${JSON.stringify(response)}`);
+        throw new Error(`Unknown letter result ${letterResult} in ${JSON.stringify(response)}`);
     }
   }
   guessResult += ` ${guess}\n`;
@@ -154,19 +162,32 @@ const updateKnown = (
     bad: badLetters,
     badPositions,
     guessResult,
+    solved: response.every((position) => position === LetterResult.PERFECT),
   };
 };
 
-const chooseWord = (words: string[], guessPool = words, verboseMode = false) => {
-  const letterScores = scoreLetters(words);
+const scoreWords = (word: string, threadLetterScores: LetterScores[], threadWords: string[][]) =>
+  threadWords
+    .map((words, i) => scoreWord(word, threadLetterScores[i], words))
+    .reduce((acc, value) => acc + value, 0);
+
+const chooseWord = (
+  threadWords: string[][],
+  guessPool = threadWords.flat(),
+  verboseMode = false
+) => {
+  const threadLetterScores = threadWords.map((words) => scoreLetters(words));
   if (verboseMode) {
     console.log(
       "scored letters",
-      Object.fromEntries(Object.entries(letterScores).sort(([, a], [, b]) => b[0] - a[0]))
+      threadLetterScores.map((letterScores) =>
+        Object.fromEntries(Object.entries(letterScores).sort(([, a], [, b]) => b[0] - a[0]))
+      )
     );
   }
   return guessPool.reduce((best, next) =>
-    calculateScore(best, letterScores, words) > calculateScore(next, letterScores, words)
+    scoreWords(best, threadLetterScores, threadWords) >
+      scoreWords(next, threadLetterScores, threadWords)
       ? best
       : next
   );
@@ -189,48 +210,77 @@ const filterWords = (words: string[], known: Known) => {
   );
 };
 
-const printKnown = (known: Known) => {
-  console.log(known.guessResult);
+const showRepeatedLetters = (letters: LetterCount) =>
+  Object.entries(letters)
+    .map(([letter, count]) => letter.repeat(count))
+    .join("");
 
-  if (!known.fixed.includes(".")) return;
+const showBadPositions = (badPositions: Record<string, Set<number>>) =>
+  [...range(5)]
+    .map((i) =>
+      Object.keys(badPositions)
+        .filter((letter) => badPositions[letter].has(i))
+        .join("")
+    )
+    .join("|");
 
-  console.log("Known", known.fixed);
-  console.log("Good", known.good);
-  console.log("Bad", known.bad);
-  console.log("Bad Positions", known.badPositions);
+const showKnown = (known: Known, thread?: number) => {
+  return [
+    thread !== undefined && `Thread: ${thread}`,
+    known.guessResult.trim(),
+    ...(known.solved
+      ? []
+      : [
+        `Known ${known.fixed}`,
+        `Good ${showRepeatedLetters(known.good)}`,
+        `Bad ${showRepeatedLetters(known.bad)}`,
+        `Bad Positions ${showBadPositions(known.badPositions)}`,
+      ]),
+  ]
+    .filter(Boolean)
+    .join("\n");
 };
 
-const rl = createInterface({ input, output });
+const printKnown = (known: Known, thread?: number) => {
+  console.log(showKnown(known, thread));
+};
+
+const rl = createInterface({ input: stdin, output: stdout });
 
 const question = (text: string) =>
   new Promise<string>((resolve) => {
     rl.question(text, resolve);
   });
 
-const requestResult = async (): Promise<LetterResult[]> => {
-  console.log(
-    "Please enter the result, with 2 for green, 1 for yellow, and 0 for gray. For example, enter 01120 for ⬜🟨🟨🟩⬜"
-  );
+const requestResult = async (thread?: number): Promise<LetterResult[]> => {
+  console.log(`Please enter the result${thread !== undefined ? ` for thread ${thread + 1}` : ""}.`);
   while (true) {
     const response = await question("? ");
     if (/^[012]{5}$/.test(response)) {
-      console.log(response);
       return [...response].map(
-        (char) => [LetterResult.GRAY, LetterResult.YELLOW, LetterResult.GREEN][+char]
+        (char) => [LetterResult.WRONG, LetterResult.CLOSE, LetterResult.PERFECT][+char]
       );
     }
-    console.error("Please enter five digits.");
+    console.error(
+      "Please enter five digits (0 = not in word, 1 = wrong position, 2 = right position)."
+    );
   }
 };
 
-const requestGuess = async () => {
+const requestGuess = async (allWords: string[]) => {
   console.log("Please enter the guess");
   while (true) {
     const response = await question("? ");
-    if (!response || /^[a-z]{5}$/.test(response)) {
+    if (!response) {
       return response;
     }
-    console.error("Please enter five letters.");
+    if (!/^[a-z]{5}$/.test(response)) {
+      console.error("Please enter five letters.");
+    } else if (!allWords.includes(response)) {
+      console.error("Please enter a valid word.");
+    } else {
+      return response;
+    }
   }
 };
 
@@ -256,13 +306,37 @@ const defineFlag = (flag: string) => {
   return enabled;
 };
 
-const printUsage = () => {
+const printUsage = (): never => {
   console.log(
     [
       "Usage:",
+      "  node wordle.js --help",
+      "  node wordle.js [--verbose|--quiet] [--hard] [--file=words.json] [--random] [--free] [--rounds=6] [--threads=4]",
+      "  node wordle.js [--verbose|--quiet] [--hard] [--file=words.json] [--free] [--rounds=6] answer",
+      "  node wordle.js [--verbose|--quiet] [--hard] [--file=words.json] [--free] [--rounds=6] [--threads=4] answer1 answer2 answer3 answer4",
       "  node wordle.js [--verbose|--quiet] [--hard] answer",
-      "  node wordle.js [--test] [--hard]",
-      "  node wordle.js [--score] answer guess",
+      "  node wordle.js [--test] [--file=words.json] [--hard]",
+      "  node wordle.js [--score=guess] answer",
+      "",
+      "  --verbose: print each letter's score for each round",
+      "  --quiet: do not print possible solutions for each round",
+      "  --hard: only guess words that have the potential to win. Sometimes guessing words that cannot win helps to",
+      "          eliminate more letters at once",
+      "  --file: choose an alternative source of words. This is a JSON array, and defaults to the provided words.json",
+      "  --free: the user specifies the guess, rather than the computer.",
+      "  --rounds: the number of rounds to play. This is used to end the game, and when the number of rounds left is",
+      "            less than or equal to the number of threads left to guess, hard mode is activated to avoid wasting",
+      "            guesses.",
+      "  --threads: the number of games to play in parallel with the same guesses, inspired by Quordle. Defaults to 1",
+      "  --random: generate a word randomly. Useful in combination with --free for playing Wordle locally",
+      "  --test: run the program with every word in the word list, and collect the numbers of rounds needed to win.",
+      "          This takes a while, but can be aborted with Ctrl-C, which still shows the results.",
+      "  --score: show the information known after making a guess, and exit.",
+      "",
+      "  trailing parameters: the trailing parameters are the word that are being guessed. Not compatible with",
+      "                       --random. This is optional, and if not given, the user will be prompted to enter the",
+      "                       result of each guess. There should be exactly one unless --threads is given, in which",
+      "                       case there should be exactly as many parameters as the number of threads.",
     ].join("\n")
   );
   process.exit(1);
@@ -289,59 +363,142 @@ const defineFlagWithArgument = (flag: string): string | undefined => {
   return undefined;
 };
 
+const mapAsyncSequentially = async <A, B>(
+  array: A[],
+  mapper: (value: A, index: number, array: A[]) => Promise<B>
+): Promise<B[]> => {
+  const result: B[] = [];
+  for (const i of range(array.length)) {
+    result.push(await mapper(array[i], i, array));
+  }
+  return result;
+};
+
+const juxtapose = (outputs: string[]): string => {
+  const height = Math.max(...outputs.map((output) => countOccurrences(output, "\n") + 1));
+  const paddedOutputs = outputs.map((output) => {
+    const lines = output.split("\n");
+    const paddedLines = lines.concat(Array.from({ length: height - lines.length }, () => ""));
+    const width = Math.max(...paddedLines.map((line) => line.length));
+    return paddedLines.map((line) => line.padEnd(width));
+  });
+  return paddedOutputs[0]
+    .map((_, i) => paddedOutputs.map((output) => output[i]).join("  "))
+    .join("\n");
+};
+
+const helpMode = defineFlag("--help");
 const hardMode = defineFlag("--hard");
 const quietMode = defineFlag("--quiet");
 const verboseMode = defineFlag("--verbose");
 const testMode = defineFlag("--test");
+const randomMode = defineFlag("--random");
 const freeMode = defineFlag("--free");
-const scoreMode = defineFlag("--score");
+const scoreGuess = defineFlagWithArgument("--score");
+const threadCount = parseInt(defineFlagWithArgument("--threads") ?? "", 10) || 1;
 const roundCount = parseInt(defineFlagWithArgument("--rounds") ?? "", 10) || 6;
-const wordFile = defineFlagWithArgument("--file") ?? "words.json";
+const wordFile =
+  defineFlagWithArgument("--file") ??
+  path.normalize(`${path.dirname(fileURLToPath(import.meta.url))}/../words.json`);
 
-const loadAllWords = () => JSON.parse(readFileSync(wordFile, "utf8"));
+const loadAllWords = (): string[] => JSON.parse(readFileSync(wordFile, "utf8"));
 
+if (helpMode) printUsage();
 if (testMode) gameModeName = GameModeName.TEST;
-if (scoreMode) gameModeName = GameModeName.SCORE;
+if (scoreGuess) gameModeName = GameModeName.SCORE;
 
 const gameModes: Record<GameModeName, GameMode> = {
   [GameModeName.NORMAL]: {
-    maxArgs: 1,
-    async run([solution]) {
+    async run(solutions) {
+      let hasSolutions = solutions.length !== 0;
+      if (hasSolutions && solutions.length !== threadCount) {
+        console.error("Error: the correct number of solutions must be provided with --threads");
+        printUsage();
+      }
+
       const allWords = loadAllWords();
 
-      if (solution && !allWords.includes(solution)) {
-        console.log(`Unknown word ${solution}`);
-        process.exit(1);
+      if (randomMode) {
+        if (hasSolutions) {
+          console.error("Error: --random cannot be used when solutions are provided");
+          printUsage();
+        }
+
+        solutions.push(
+          ...Array.from(
+            { length: threadCount },
+            () => allWords[Math.floor(Math.random() * allWords.length)]
+          )
+        );
+        hasSolutions = true;
       }
 
-      let known = newKnown();
+      for (const solution of solutions) {
+        if (solution && !allWords.includes(solution)) {
+          console.log(`Unknown word ${solution}`);
+          process.exit(1);
+        }
+      }
 
-      let words = allWords;
-      for (const i of range()) {
-        let guess;
+      let threadKnown = Array.from({ length: threadCount }, () => nothingKnown());
+
+      let threadWords = Array.from({ length: threadCount }, () => allWords);
+
+      for (const roundNumber of range(roundCount)) {
+        let guess = "";
         if (freeMode) {
-          guess = await requestGuess();
+          guess = await requestGuess(allWords);
         }
         if (!guess) {
-          const guessPool = hardMode || i >= roundCount - 1 ? words : allWords;
-          guess = chooseWord(words, guessPool, verboseMode);
+          const wordsToGuess = threadKnown.filter((known) => !known.solved).length;
+          const guessPool =
+            hardMode || roundNumber >= roundCount - wordsToGuess ? threadWords.flat() : allWords;
+          guess = chooseWord(threadWords, guessPool, verboseMode);
         }
-        if (!quietMode || !solution) console.log("Guessing", guess);
-        const response = solution ? makeGuess(guess, solution) : await requestResult();
-        known = updateKnown(guess, response, known);
-        if (!known.fixed.includes(".")) break;
+        if (!quietMode || !hasSolutions) console.log("Guessing", guess);
+        const newKnown = await mapAsyncSequentially(threadKnown, async (known, i) => {
+          if (known.solved) return known;
+          const response = hasSolutions
+            ? makeGuess(guess, solutions[i])
+            : await requestResult(threadCount > 1 ? i : undefined);
+          return updateKnown(guess, response, known);
+        });
+        threadKnown = newKnown;
+        if (threadKnown.every((known) => known.solved)) break;
 
-        words = filterWords(words, known);
-        if (words.length === 0) {
-          console.error("Word not known with constraints:");
-          printKnown(known);
-          process.exit(1);
-        } else if (!quietMode) printKnown(known);
-        if (!quietMode) console.log("Possible solutions", words);
+        threadWords = threadWords.map((words, i) => {
+          if (newKnown[i].solved) return [];
+          const remainingWords = filterWords(words, newKnown[i]);
+
+          if (remainingWords.length === 0) {
+            console.error(`Word not known with constraints:`);
+            printKnown(newKnown[i], threadCount > 1 ? i : undefined);
+            process.exit(1);
+          }
+
+          return remainingWords;
+        });
+
+        console.log();
+        console.log(
+          juxtapose(
+            threadKnown.map((known, i) => showKnown(known, threadCount > 1 ? i : undefined))
+          )
+        );
+        console.log();
+
+        if (!quietMode) console.log("Possible solutions", threadWords);
       }
-      console.log(known.guessResult?.trim());
-      console.log(countOccurrences(known.guessResult, "\n"));
-      process.exit(0);
+      const threadGuessResult = juxtapose(threadKnown.map((known) => known.guessResult.trim()));
+      console.log(threadGuessResult);
+
+      if (threadKnown.every((known) => known.solved)) {
+        console.log("Score:", countOccurrences(threadGuessResult, "\n") + 1);
+        process.exit(0);
+      } else {
+        console.log("You lost");
+        process.exit(1);
+      }
     },
   },
   [GameModeName.TEST]: {
@@ -358,17 +515,17 @@ const gameModes: Record<GameModeName, GameMode> = {
               setTimeout(r, 0);
             });
 
-            let known = newKnown();
+            let known = nothingKnown();
             let words = allWords;
             for (const _ of range(10)) {
               const guessPool = hardMode ? words : allWords;
-              const guess = chooseWord(words, guessPool);
+              const guess = chooseWord([words], guessPool);
               const response = makeGuess(guess, solution);
               known = updateKnown(guess, response, known);
               if (!known.fixed.includes(".")) break;
               words = filterWords(words, known);
             }
-            const score = countOccurrences(known.guessResult, "\n");
+            const score = countOccurrences(known.guessResult, "\n") + 1;
             frequencyOfScores[score] = (frequencyOfScores[score] ?? 0) + 1;
           }
         })(),
@@ -387,12 +544,18 @@ const gameModes: Record<GameModeName, GameMode> = {
     },
   },
   [GameModeName.SCORE]: {
-    minArgs: 2,
-    maxArgs: 2,
-    run([expected, found]) {
-      const result = makeGuess(found, expected);
-      const known = updateKnown(found, result);
+    minArgs: 1,
+    maxArgs: 1,
+    run([solution]) {
+      if (scoreGuess === undefined) {
+        console.error("a parameter for --score must be given");
+        printUsage();
+        return;
+      }
+      const result = makeGuess(scoreGuess, solution);
+      const known = updateKnown(scoreGuess, result);
       printKnown(known);
+      process.exit();
     },
   },
 };
