@@ -1,0 +1,8 @@
+{
+  "name": "wordle-tool",
+  "version": "0.0.1",
+  "main": "wordle.js",
+  "author": "Charlie Harding <charlie_harding@icloud.com>",
+  "license": "none",
+  "private": true
+}
